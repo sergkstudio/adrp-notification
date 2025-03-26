@@ -115,17 +115,23 @@ def get_users_with_old_passwords():
     conn.search(AD_CONFIG['base_dn'], search_filter, attributes=attributes)
     users = []
     
+    logger.info(f"Найдено пользователей в AD: {len(conn.entries)}")
     for entry in conn.entries:
         try:
+            logger.debug(f"Обработка пользователя: {entry.sAMAccountName.value}")
             # Проверяем членство в целевых группах
             member_of = entry.memberOf.value if hasattr(entry, 'memberOf') and entry.memberOf.value is not None else []
             if isinstance(member_of, str):
                 member_of = [member_of]
             
+            logger.debug(f"Группы пользователя {entry.sAMAccountName.value}: {member_of}")
+            logger.debug(f"Искомые группы: {target_groups_dn}")
+            
             # Проверяем, является ли пользователь членом всех указанных групп
             is_member = all(group_dn in member_of for group_dn in target_groups_dn)
             if not is_member:
-                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом всех групп: {', '.join(AD_CONFIG['included_groups'])}")
+                missing_groups = [group for group in target_groups_dn if group not in member_of]
+                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом следующих групп: {missing_groups}")
                 continue
                 
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
