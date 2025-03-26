@@ -46,7 +46,7 @@ SMTP_CONFIG = {
     'from_email': os.getenv('SMTP_FROM_EMAIL')
 }
 
-     {
+TELEGRAM_CONFIG = {
     'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
     'chat_id': os.getenv('TELEGRAM_CHAT_ID')
 }
