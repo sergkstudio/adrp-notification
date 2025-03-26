@@ -34,7 +34,7 @@ AD_CONFIG = {
     'user': os.getenv('AD_USER'),
     'password': os.getenv('AD_PASSWORD'),
     'base_dn': os.getenv('AD_BASE_DN'),
-    'included_ous': os.getenv('AD_INCLUDED_OUS').split(',')
+    'included_group': os.getenv('AD_INCLUDED_group')
 }
 
 SMTP_CONFIG = {
@@ -89,12 +89,22 @@ def get_users_with_old_passwords():
     logger.info("Начало поиска пользователей с устаревшими паролями")
     conn = get_ad_connection()
     
+    # Поиск группы из конфигурации
+    group_search_filter = f'(&(objectClass=group)(cn={AD_CONFIG["included_group"]}))'
+    conn.search(AD_CONFIG['base_dn'], group_search_filter, attributes=['distinguishedName'])
+    if not conn.entries:
+        logger.error(f"Группа {AD_CONFIG['included_group']} не найдена")
+        return []
+    
+    target_group_dn = conn.entries[0].distinguishedName.value
+    logger.info(f"Найдена группа {AD_CONFIG['included_group']}: {target_group_dn}")
+    
     search_filter = (
         '(&(objectCategory=person)(objectClass=user)'
         '(!(userAccountControl:1.2.840.113556.1.4.803:=2)))'
     )
     
-    attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName']
+    attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName', 'memberOf']
     
     logger.info(f"Выполнение поиска в AD с фильтром: {search_filter}")
     conn.search(AD_CONFIG['base_dn'], search_filter, attributes=attributes)
@@ -102,30 +112,32 @@ def get_users_with_old_passwords():
     
     for entry in conn.entries:
         try:
+            # Проверяем членство в целевой группе
+            member_of = entry.memberOf.value if hasattr(entry, 'memberOf') else []
+            if isinstance(member_of, str):
+                member_of = [member_of]
+            
+            if target_group_dn not in member_of:
+                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом группы {AD_CONFIG['included_group']}")
+                continue
+                
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
             current_time = datetime.now(timezone.utc)
             delta = current_time - pwd_last_set
             
-            # Проверяем, что пользователь состоит во всех указанных OU
-            user_dn = entry.distinguishedName.value
-            is_in_all_target_ous = all(ou in user_dn for ou in AD_CONFIG['included_ous'])
-            
-            if is_in_all_target_ous:
-                if delta.days >= PASSWORD_AGE_DAYS:
-                    user_info = {
-                        'login': entry.sAMAccountName.value,
-                        'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
-                        'last_changed': pwd_last_set
-                    }
-                    users.append(user_info)
-                    logger.info(f"Найден пользователь с устаревшим паролем во всех целевых OU: {user_info['login']}, последняя смена: {user_info['last_changed']}")
-            else:
-                logger.debug(f"Пользователь {entry.sAMAccountName.value} не входит во все целевые OU: {AD_CONFIG['included_ous']}")
+            if delta.days >= PASSWORD_AGE_DAYS:
+                user_info = {
+                    'login': entry.sAMAccountName.value,
+                    'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
+                    'last_changed': pwd_last_set
+                }
+                users.append(user_info)
+                logger.info(f"Найден пользователь с устаревшим паролем: {user_info['login']}, последняя смена: {user_info['last_changed']}")
         except Exception as e:
             logger.error(f"Ошибка при обработке пользователя {entry.sAMAccountName}: {str(e)}")
     
     conn.unbind()
-    logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями во всех целевых OU: {len(users)}")
+    logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
     return users
 
 def send_notification(email, login):
