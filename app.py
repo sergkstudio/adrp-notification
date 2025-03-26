@@ -106,19 +106,23 @@ def get_users_with_old_passwords():
             current_time = datetime.now(timezone.utc)
             delta = current_time - pwd_last_set
             
-            if delta.days >= PASSWORD_AGE_DAYS:
-                user_info = {
-                    'login': entry.sAMAccountName.value,
-                    'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
-                    'last_changed': pwd_last_set
-                }
-                users.append(user_info)
-                logger.info(f"Найден пользователь с устаревшим паролем: {user_info['login']}, последняя смена: {user_info['last_changed']}")
+            # Проверяем, что пользователь состоит в OU=zitadel
+            if 'OU=zitadel' in entry.distinguishedName.value:
+                if delta.days >= PASSWORD_AGE_DAYS:
+                    user_info = {
+                        'login': entry.sAMAccountName.value,
+                        'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
+                        'last_changed': pwd_last_set
+                    }
+                    users.append(user_info)
+                    logger.info(f"Найден пользователь с устаревшим паролем в OU=zitadel: {user_info['login']}, последняя смена: {user_info['last_changed']}")
+            else:
+                logger.debug(f"Пользователь {entry.sAMAccountName.value} не входит в OU=zitadel")
         except Exception as e:
             logger.error(f"Ошибка при обработке пользователя {entry.sAMAccountName}: {str(e)}")
     
     conn.unbind()
-    logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
+    logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями в OU=zitadel: {len(users)}")
     return users
 
 def send_notification(email, login):
