@@ -1,6 +1,6 @@
 import os
 from ldap3 import Server, Connection, ALL
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import smtplib
 from email.mime.text import MIMEText
 from email.utils import formatdate
@@ -55,8 +55,12 @@ def convert_filetime(ft):
     """Конвертирует Windows FileTime в datetime"""
     try:
         if isinstance(ft, datetime):
-            return ft
-        result = datetime(1601, 1, 1) + timedelta(microseconds=ft//10)
+            # Если дата уже имеет часовой пояс, возвращаем как есть
+            if ft.tzinfo is not None:
+                return ft
+            # Если дата без часового пояса, добавляем UTC
+            return ft.replace(tzinfo=timezone.utc)
+        result = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ft//10)
         logger.debug(f"Конвертация FileTime {ft} в datetime: {result}")
         return result
     except Exception as e:
@@ -99,7 +103,8 @@ def get_users_with_old_passwords():
     for entry in conn.entries:
         try:
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
-            delta = datetime.now() - pwd_last_set
+            current_time = datetime.now(timezone.utc)
+            delta = current_time - pwd_last_set
             
             if delta.days >= PASSWORD_AGE_DAYS:
                 user_info = {
