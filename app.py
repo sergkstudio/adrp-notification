@@ -122,10 +122,10 @@ def get_users_with_old_passwords():
             if isinstance(member_of, str):
                 member_of = [member_of]
             
-            # Проверяем, является ли пользователь членом хотя бы одной из групп
-            is_member = any(group_dn in member_of for group_dn in target_groups_dn)
+            # Проверяем, является ли пользователь членом всех указанных групп
+            is_member = all(group_dn in member_of for group_dn in target_groups_dn)
             if not is_member:
-                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом ни одной из групп: {', '.join(AD_CONFIG['included_groups'])}")
+                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом всех групп: {', '.join(AD_CONFIG['included_groups'])}")
                 continue
                 
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
