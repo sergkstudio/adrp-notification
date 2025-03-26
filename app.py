@@ -54,6 +54,8 @@ logger.info("Логирование настроено")
 def convert_filetime(ft):
     """Конвертирует Windows FileTime в datetime"""
     try:
+        if isinstance(ft, datetime):
+            return ft
         result = datetime(1601, 1, 1) + timedelta(microseconds=ft//10)
         logger.debug(f"Конвертация FileTime {ft} в datetime: {result}")
         return result
