@@ -106,11 +106,11 @@ def get_users_with_old_passwords():
             current_time = datetime.now(timezone.utc)
             delta = current_time - pwd_last_set
             
-            # Проверяем, что пользователь состоит в одном из указанных OU
+            # Проверяем, что пользователь состоит во всех указанных OU
             user_dn = entry.distinguishedName.value
-            is_in_target_ou = any(ou in user_dn for ou in AD_CONFIG['included_ous'])
+            is_in_all_target_ous = all(ou in user_dn for ou in AD_CONFIG['included_ous'])
             
-            if is_in_target_ou:
+            if is_in_all_target_ous:
                 if delta.days >= PASSWORD_AGE_DAYS:
                     user_info = {
                         'login': entry.sAMAccountName.value,
@@ -118,14 +118,14 @@ def get_users_with_old_passwords():
                         'last_changed': pwd_last_set
                     }
                     users.append(user_info)
-                    logger.info(f"Найден пользователь с устаревшим паролем в целевом OU: {user_info['login']}, последняя смена: {user_info['last_changed']}")
+                    logger.info(f"Найден пользователь с устаревшим паролем во всех целевых OU: {user_info['login']}, последняя смена: {user_info['last_changed']}")
             else:
-                logger.debug(f"Пользователь {entry.sAMAccountName.value} не входит в целевые OU: {AD_CONFIG['included_ous']}")
+                logger.debug(f"Пользователь {entry.sAMAccountName.value} не входит во все целевые OU: {AD_CONFIG['included_ous']}")
         except Exception as e:
             logger.error(f"Ошибка при обработке пользователя {entry.sAMAccountName}: {str(e)}")
     
     conn.unbind()
-    logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями в целевых OU: {len(users)}")
+    logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями во всех целевых OU: {len(users)}")
     return users
 
 def send_notification(email, login):
