@@ -9,7 +9,9 @@ import time
 from dotenv import load_dotenv
 
 # Загрузка переменных окружения из .env файла
+logging.info("Загрузка переменных окружения...")
 load_dotenv()
+logging.info("Переменные окружения успешно загружены")
 
 # Конфигурационные параметры
 AD_CONFIG = {
@@ -36,25 +38,41 @@ CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL'))
 logging.basicConfig(
     filename='password_notifier.log',
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
+logging.info("Логирование настроено")
 
 def convert_filetime(ft):
     """Конвертирует Windows FileTime в datetime"""
-    return datetime(1601, 1, 1) + timedelta(microseconds=ft//10)
+    try:
+        result = datetime(1601, 1, 1) + timedelta(microseconds=ft//10)
+        logging.debug(f"Конвертация FileTime {ft} в datetime: {result}")
+        return result
+    except Exception as e:
+        logging.error(f"Ошибка при конвертации FileTime: {str(e)}")
+        raise
 
 def get_ad_connection():
     """Устанавливает соединение с AD"""
-    server = Server(AD_CONFIG['server'], get_info=ALL)
-    return Connection(
-        server,
-        user=AD_CONFIG['user'],
-        password=AD_CONFIG['password'],
-        auto_bind=True
-    )
+    try:
+        logging.info(f"Попытка подключения к AD серверу: {AD_CONFIG['server']}")
+        server = Server(AD_CONFIG['server'], get_info=ALL)
+        conn = Connection(
+            server,
+            user=AD_CONFIG['user'],
+            password=AD_CONFIG['password'],
+            auto_bind=True
+        )
+        logging.info("Успешное подключение к AD")
+        return conn
+    except Exception as e:
+        logging.error(f"Ошибка при подключении к AD: {str(e)}")
+        raise
 
 def get_users_with_old_passwords():
     """Возвращает пользователей с паролями старше заданного срока"""
+    logging.info("Начало поиска пользователей с устаревшими паролями")
     conn = get_ad_connection()
     ou_filter = '(|{})'.format(''.join([f'(distinguishedName={ou})' for ou in AD_CONFIG['included_ous']]))
     
@@ -66,6 +84,7 @@ def get_users_with_old_passwords():
     
     attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName']
     
+    logging.info(f"Выполнение поиска в AD с фильтром: {search_filter}")
     conn.search(AD_CONFIG['base_dn'], search_filter, attributes=attributes)
     users = []
     
@@ -75,19 +94,23 @@ def get_users_with_old_passwords():
             delta = datetime.now() - pwd_last_set
             
             if delta.days >= PASSWORD_AGE_DAYS:
-                users.append({
+                user_info = {
                     'login': entry.sAMAccountName.value,
                     'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
                     'last_changed': pwd_last_set
-                })
+                }
+                users.append(user_info)
+                logging.info(f"Найден пользователь с устаревшим паролем: {user_info['login']}, последняя смена: {user_info['last_changed']}")
         except Exception as e:
-            logging.error(f"Error processing user {entry.sAMAccountName}: {str(e)}")
+            logging.error(f"Ошибка при обработке пользователя {entry.sAMAccountName}: {str(e)}")
     
     conn.unbind()
+    logging.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
     return users
 
 def send_notification(email, login):
     """Отправляет email-уведомление"""
+    logging.info(f"Подготовка отправки уведомления пользователю {login} на email {email}")
     subject = "[ТЕСТ] Требуется смена пароля"
     body = f"""Уважаемый пользователь {login},
     
@@ -106,27 +129,31 @@ IT-отдел Profit SI"""
     msg['Date'] = formatdate(localtime=True)
     
     try:
+        logging.info(f"Подключение к SMTP серверу {SMTP_CONFIG['server']}:{SMTP_CONFIG['port']}")
         with smtplib.SMTP(SMTP_CONFIG['server'], SMTP_CONFIG['port']) as server:
             server.starttls()
             server.login(SMTP_CONFIG['user'], SMTP_CONFIG['password'])
             server.send_message(msg)
-        logging.info(f"Sent test notification to {email}")
+        logging.info(f"Уведомление успешно отправлено пользователю {login}")
     except Exception as e:
-        logging.error(f"Failed to send email to {email}: {str(e)}")
+        logging.error(f"Ошибка при отправке email пользователю {login}: {str(e)}")
 
 def main_loop():
     """Основной цикл проверки"""
+    logging.info("Запуск основного цикла проверки")
     while True:
         try:
-            logging.info("Starting password check...")
+            logging.info("Начало новой итерации проверки паролей")
             users = get_users_with_old_passwords()
             for user in users:
                 send_notification(user['email'], user['login'])
-            logging.info(f"Processed {len(users)} users")
+            logging.info(f"Итерация завершена. Обработано пользователей: {len(users)}")
         except Exception as e:
-            logging.error(f"Critical error: {str(e)}")
+            logging.error(f"Критическая ошибка в основном цикле: {str(e)}")
         
+        logging.info(f"Ожидание {CHECK_INTERVAL} секунд до следующей проверки")
         time.sleep(CHECK_INTERVAL)
 
 if __name__ == "__main__":
+    logging.info("Запуск приложения Password Notifier")
     main_loop()
