@@ -7,6 +7,7 @@ from email.utils import formatdate
 import logging
 import time
 from dotenv import load_dotenv
+import sys
 
 # Загрузка переменных окружения из .env файла
 logging.info("Загрузка переменных окружения...")
@@ -36,10 +37,12 @@ CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL'))
 
 # Настройка логирования
 logging.basicConfig(
-    filename='password_notifier.log',
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logging.info("Логирование настроено")
 
