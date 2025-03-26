@@ -34,7 +34,7 @@ AD_CONFIG = {
     'user': os.getenv('AD_USER'),
     'password': os.getenv('AD_PASSWORD'),
     'base_dn': os.getenv('AD_BASE_DN'),
-    'included_group': os.getenv('AD_INCLUDED_group')
+    'included_groups': os.getenv('AD_INCLUDED_GROUP').split(',')
 }
 
 SMTP_CONFIG = {
@@ -89,15 +89,20 @@ def get_users_with_old_passwords():
     logger.info("Начало поиска пользователей с устаревшими паролями")
     conn = get_ad_connection()
     
-    # Поиск группы из конфигурации
-    group_search_filter = f'(&(objectClass=group)(cn={AD_CONFIG["included_group"]}))'
-    conn.search(AD_CONFIG['base_dn'], group_search_filter, attributes=['distinguishedName'])
-    if not conn.entries:
-        logger.error(f"Группа {AD_CONFIG['included_group']} не найдена")
-        return []
+    # Поиск групп из конфигурации
+    target_groups_dn = []
+    for group_name in AD_CONFIG['included_groups']:
+        group_search_filter = f'(&(objectClass=group)(cn={group_name}))'
+        conn.search(AD_CONFIG['base_dn'], group_search_filter, attributes=['distinguishedName'])
+        if not conn.entries:
+            logger.error(f"Группа {group_name} не найдена")
+            continue
+        target_groups_dn.append(conn.entries[0].distinguishedName.value)
+        logger.info(f"Найдена группа {group_name}: {conn.entries[0].distinguishedName.value}")
     
-    target_group_dn = conn.entries[0].distinguishedName.value
-    logger.info(f"Найдена группа {AD_CONFIG['included_group']}: {target_group_dn}")
+    if not target_groups_dn:
+        logger.error("Не найдено ни одной группы из списка")
+        return []
     
     search_filter = (
         '(&(objectCategory=person)(objectClass=user)'
@@ -112,13 +117,15 @@ def get_users_with_old_passwords():
     
     for entry in conn.entries:
         try:
-            # Проверяем членство в целевой группе
+            # Проверяем членство в целевых группах
             member_of = entry.memberOf.value if hasattr(entry, 'memberOf') else []
             if isinstance(member_of, str):
                 member_of = [member_of]
             
-            if target_group_dn not in member_of:
-                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом группы {AD_CONFIG['included_group']}")
+            # Проверяем, является ли пользователь членом хотя бы одной из групп
+            is_member = any(group_dn in member_of for group_dn in target_groups_dn)
+            if not is_member:
+                logger.debug(f"Пользователь {entry.sAMAccountName.value} не является членом ни одной из групп: {', '.join(AD_CONFIG['included_groups'])}")
                 continue
                 
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
