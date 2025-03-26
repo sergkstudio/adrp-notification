@@ -8,6 +8,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import time
 from dotenv import load_dotenv
+import requests
 
 # Создание директории для логов, если она не существует
 os.makedirs('logs', exist_ok=True)
@@ -43,6 +44,11 @@ SMTP_CONFIG = {
     'user': os.getenv('SMTP_USER'),
     'password': os.getenv('SMTP_PASSWORD'),
     'from_email': os.getenv('SMTP_FROM_EMAIL')
+}
+
+     {
+    'bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+    'chat_id': os.getenv('TELEGRAM_CHAT_ID')
 }
 
 EMAIL_DOMAIN = os.getenv('EMAIL_DOMAIN')
@@ -183,6 +189,32 @@ IT-отдел Domain.example"""
     except Exception as e:
         logger.error(f"Ошибка при отправке email пользователю {login}: {str(e)}")
 
+def send_telegram_notification(user_info):
+    """Отправляет уведомление в Telegram"""
+    try:
+        message = (
+            f"🔔 Уведомление о устаревшем пароле\n\n"
+            f"Пользователь: {user_info['login']}\n"
+            f"Email: {user_info['email']}\n"
+            f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
+            f"Прошло дней: {(datetime.now(timezone.utc) - user_info['last_changed']).days}"
+        )
+        
+        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/sendMessage"
+        data = {
+            "chat_id": TELEGRAM_CONFIG['chat_id'],
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            logger.info(f"Уведомление в Telegram успешно отправлено для пользователя {user_info['login']}")
+        else:
+            logger.error(f"Ошибка при отправке уведомления в Telegram: {response.text}")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления в Telegram: {str(e)}")
+
 def main_loop():
     """Основной цикл проверки"""
     logger.info("Запуск основного цикла проверки")
@@ -192,6 +224,7 @@ def main_loop():
             users = get_users_with_old_passwords()
             for user in users:
                 send_notification(user['email'], user['login'])
+                send_telegram_notification(user)
             logger.info(f"Итерация завершена. Обработано пользователей: {len(users)}")
         except Exception as e:
             logger.error(f"Критическая ошибка в основном цикле: {str(e)}")
