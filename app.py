@@ -83,13 +83,9 @@ def get_users_with_old_passwords():
     logger.info("Начало поиска пользователей с устаревшими паролями")
     conn = get_ad_connection()
     
-    # Формируем фильтр для OU
-    ou_filter = '(|' + ''.join([f'(distinguishedName:1.2.840.113556.1.4.1941:={ou})' for ou in AD_CONFIG['included_ous']]) + ')'
-    
     search_filter = (
         '(&(objectCategory=person)(objectClass=user)'
-        '(!(userAccountControl:1.2.840.113556.1.4.803:=2))'
-        f'{ou_filter})'
+        '(!(userAccountControl:1.2.840.113556.1.4.803:=2)))'
     )
     
     attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName']
