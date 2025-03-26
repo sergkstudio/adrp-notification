@@ -118,7 +118,7 @@ def get_users_with_old_passwords():
     for entry in conn.entries:
         try:
             # Проверяем членство в целевых группах
-            member_of = entry.memberOf.value if hasattr(entry, 'memberOf') else []
+            member_of = entry.memberOf.value if hasattr(entry, 'memberOf') and entry.memberOf.value is not None else []
             if isinstance(member_of, str):
                 member_of = [member_of]
             
