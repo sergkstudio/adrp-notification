@@ -9,9 +9,6 @@ services:
       - TZ=Europe/Moscow
     depends_on:
       - redis
-    volumes:
-      - ./logs:/app/logs
-
   redis:
     image: redis:alpine
     volumes:
