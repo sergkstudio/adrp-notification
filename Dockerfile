@@ -30,6 +30,10 @@ RUN useradd -m -u 1000 appuser && \
 # Установка рабочей директории
 WORKDIR /app
 
+# Создание директории для логов и установка прав доступа
+RUN mkdir -p /app/logs && \
+    chown -R appuser:appuser /app/logs
+
 # Копирование файлов приложения
 COPY --chown=appuser:appuser app.py .
 COPY .env /app/.env
