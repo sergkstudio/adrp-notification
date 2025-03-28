@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 import requests
 import redis
 import json
-from pytz import timezone
 
 # Создание директории для логов, если она не существует
 os.makedirs('logs', exist_ok=True)
