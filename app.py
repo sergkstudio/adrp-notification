@@ -112,17 +112,21 @@ def convert_filetime(ft):
     """Конвертирует Windows FileTime в datetime"""
     try:
         if isinstance(ft, datetime):
-            # Если дата уже имеет часовой пояс, возвращаем как есть
+            # Если дата уже имеет часовой пояс, конвертируем в локальный
             if ft.tzinfo is not None:
-                logger.debug(f"Дата уже имеет часовой пояс: {ft.strftime('%d.%m.%Y %H:%M:%S %Z')}")
-                return ft
+                logger.debug(f"Дата до конвертации: {ft.strftime('%d.%m.%Y %H:%M:%S %Z')}")
+                local_dt = ft.astimezone(local_tz)
+                logger.debug(f"Дата после конвертации в {local_tz}: {local_dt.strftime('%d.%m.%Y %H:%M:%S %Z')}")
+                return local_dt
             # Если дата без часового пояса, добавляем системный часовой пояс
             localized_dt = local_tz.localize(ft)
             logger.debug(f"Дата локализована в часовой пояс {local_tz}: {localized_dt.strftime('%d.%m.%Y %H:%M:%S %Z')}")
             return localized_dt
-        result = datetime(1601, 1, 1, tzinfo=local_tz) + timedelta(microseconds=ft//10)
-        logger.debug(f"Конвертация FileTime {ft} в datetime: {result.strftime('%d.%m.%Y %H:%M:%S %Z')}")
-        return result
+        # Для FileTime создаем дату в UTC и конвертируем в локальный часовой пояс
+        utc_dt = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ft//10)
+        local_dt = utc_dt.astimezone(local_tz)
+        logger.debug(f"Конвертация FileTime {ft} в datetime: {local_dt.strftime('%d.%m.%Y %H:%M:%S %Z')}")
+        return local_dt
     except Exception as e:
         logger.error(f"Ошибка при конвертации FileTime: {str(e)}")
         raise
