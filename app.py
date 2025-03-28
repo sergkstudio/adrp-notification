@@ -214,9 +214,59 @@ IT-отдел Domain.example"""
     except Exception as e:
         logger.error(f"Ошибка при отправке email пользователю {login}: {str(e)}")
 
+def find_user_messages_in_chat(user_login):
+    """Поиск сообщений о пользователе в чате"""
+    try:
+        # Получаем все ключи из Redis, связанные с уведомлениями
+        keys = redis_client.keys("telegram_notification:*")
+        user_messages = []
+        
+        for key in keys:
+            notification_data = json.loads(redis_client.get(key))
+            if notification_data.get('user_login') == user_login:
+                user_messages.append({
+                    'message_id': notification_data.get('message_id'),
+                    'key': key
+                })
+        
+        return user_messages
+    except Exception as e:
+        logger.error(f"Ошибка при поиске сообщений пользователя {user_login}: {str(e)}")
+        return []
+
+def delete_telegram_message(message_id):
+    """Удаление сообщения из Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/deleteMessage"
+        data = {
+            "chat_id": TELEGRAM_CONFIG['chat_id'],
+            "message_id": message_id
+        }
+        
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            logger.info(f"Сообщение {message_id} успешно удалено из Telegram")
+            return True
+        else:
+            logger.error(f"Ошибка при удалении сообщения {message_id}: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при удалении сообщения {message_id}: {str(e)}")
+        return False
+
 def send_telegram_notification(user_info):
     """Отправляет уведомление в Telegram"""
     try:
+        # Поиск существующих сообщений о пользователе
+        existing_messages = find_user_messages_in_chat(user_info['login'])
+        
+        # Удаляем старые сообщения
+        for message in existing_messages:
+            if delete_telegram_message(message['message_id']):
+                # Удаляем информацию из Redis
+                redis_client.delete(message['key'])
+                logger.info(f"Удалена информация о сообщении {message['message_id']} из Redis")
+        
         full_name = f"{user_info['given_name']} {user_info['sn']}".strip()
         if not full_name:
             full_name = user_info['login']
