@@ -34,6 +34,8 @@ logger.info("Переменные окружения успешно загруж
 
 # Получение системного часового пояса
 local_tz = pytz.timezone(os.getenv('TZ', 'Europe/Moscow'))
+logger.info(f"Используется часовой пояс: {local_tz}")
+logger.info(f"Текущее время в локальном часовом поясе: {datetime.now(local_tz).strftime('%d.%m.%Y %H:%M:%S %Z')}")
 
 # Конфигурационные параметры
 AD_CONFIG = {
@@ -112,11 +114,14 @@ def convert_filetime(ft):
         if isinstance(ft, datetime):
             # Если дата уже имеет часовой пояс, возвращаем как есть
             if ft.tzinfo is not None:
+                logger.debug(f"Дата уже имеет часовой пояс: {ft.strftime('%d.%m.%Y %H:%M:%S %Z')}")
                 return ft
             # Если дата без часового пояса, добавляем системный часовой пояс
-            return local_tz.localize(ft)
+            localized_dt = local_tz.localize(ft)
+            logger.debug(f"Дата локализована в часовой пояс {local_tz}: {localized_dt.strftime('%d.%m.%Y %H:%M:%S %Z')}")
+            return localized_dt
         result = datetime(1601, 1, 1, tzinfo=local_tz) + timedelta(microseconds=ft//10)
-        logger.debug(f"Конвертация FileTime {ft} в datetime: {result}")
+        logger.debug(f"Конвертация FileTime {ft} в datetime: {result.strftime('%d.%m.%Y %H:%M:%S %Z')}")
         return result
     except Exception as e:
         logger.error(f"Ошибка при конвертации FileTime: {str(e)}")
@@ -143,6 +148,12 @@ def get_users_with_old_passwords():
     """Возвращает пользователей с паролями старше заданного срока"""
     logger.info("Начало поиска пользователей с устаревшими паролями")
     conn = get_ad_connection()
+    
+    # Получаем текущую дату в системном часовом поясе
+    current_date = datetime.now(local_tz)
+    cutoff_date = current_date - timedelta(days=PASSWORD_AGE_DAYS)
+    logger.info(f"Текущая дата: {current_date.strftime('%d.%m.%Y %H:%M:%S %Z')}")
+    logger.info(f"Дата отсечки: {cutoff_date.strftime('%d.%m.%Y %H:%M:%S %Z')}")
     
     # Поиск групп из конфигурации
     target_groups_dn = []
@@ -190,10 +201,8 @@ def get_users_with_old_passwords():
                 continue
                 
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
-            current_time = datetime.now(local_tz)
-            delta = current_time - pwd_last_set
             
-            if delta.days >= PASSWORD_AGE_DAYS:
+            if pwd_last_set <= cutoff_date:
                 user_info = {
                     'login': entry.sAMAccountName.value,
                     'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
