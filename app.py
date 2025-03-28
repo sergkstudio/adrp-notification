@@ -354,6 +354,39 @@ def send_telegram_notification(user_info):
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления в Telegram: {str(e)}")
 
+def check_and_cleanup_old_messages(users_with_old_passwords):
+    """Проверяет и удаляет сообщения о пользователях, чьи пароли были обновлены"""
+    try:
+        # Получаем все ключи из Redis
+        keys = redis_client.keys("telegram_notification:*")
+        if not keys:
+            return
+
+        # Создаем список логинов пользователей с устаревшими паролями
+        current_users = {user['login'] for user in users_with_old_passwords}
+        
+        for key in keys:
+            try:
+                notification_data = json.loads(redis_client.get(key))
+                user_login = notification_data.get('user_login')
+                
+                # Если пользователь не в списке текущих пользователей с устаревшими паролями,
+                # значит его пароль был обновлен
+                if user_login and user_login not in current_users:
+                    message_id = notification_data.get('message_id')
+                    if message_id:
+                        if delete_telegram_message(message_id):
+                            redis_client.delete(key)
+                            logger.info(f"Удалено сообщение {message_id} для пользователя {user_login} (пароль обновлен)")
+            except Exception as e:
+                logger.error(f"Ошибка при обработке ключа {key}: {str(e)}")
+                continue
+                
+    except redis.ConnectionError as e:
+        logger.error(f"Ошибка подключения к Redis при проверке старых сообщений: {str(e)}")
+    except Exception as e:
+        logger.error(f"Ошибка при проверке старых сообщений: {str(e)}")
+
 def main_loop():
     """Основной цикл проверки"""
     logger.info("Запуск основного цикла проверки")
@@ -361,6 +394,10 @@ def main_loop():
         try:
             logger.info("Начало новой итерации проверки паролей")
             users = get_users_with_old_passwords()
+            
+            # Проверяем и удаляем сообщения о пользователях с обновленными паролями
+            check_and_cleanup_old_messages(users)
+            
             for i, user in enumerate(users):
                 send_notification(user['email'], user['login'])
                 send_telegram_notification(user)
