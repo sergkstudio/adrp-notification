@@ -206,11 +206,17 @@ def get_users_with_old_passwords():
     logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
     return users
 
-def send_notification(email, login):
+def send_notification(email, login, given_name='', sn=''):
     """Отправляет email-уведомление"""
     logger.info(f"Подготовка отправки уведомления пользователю {login} на email {email}")
     subject = "[ТЕСТ] Требуется смена пароля"
-    body = f"""Уважаемый пользователь {login},
+    
+    # Формируем полное имя пользователя
+    full_name = f"{given_name} {sn}".strip()
+    if not full_name:
+        full_name = login
+        
+    body = f"""Уважаемый {full_name},
     
 Ваш пароль в системе был изменен более {PASSWORD_AGE_DAYS} дней назад.
 Пожалуйста, выполните смену пароля в ближайшее время.
@@ -399,7 +405,12 @@ def main_loop():
             check_and_cleanup_old_messages(users)
             
             for i, user in enumerate(users):
-                send_notification(user['email'], user['login'])
+                send_notification(
+                    user['email'], 
+                    user['login'],
+                    user['given_name'],
+                    user['sn']
+                )
                 send_telegram_notification(user)
                 # Добавляем задержку между отправкой сообщений в Telegram (3 секунды)
                 if i < len(users) - 1:  # Не ждем после последнего сообщения
