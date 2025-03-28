@@ -201,7 +201,6 @@ def send_telegram_notification(user_info):
         message = (
             f"🔔 Уведомление о устаревшем пароле\n\n"
             f"Пользователь: {full_name}\n"
-            f"Логин: {user_info['login']}\n"
             f"Email: {user_info['email']}\n"
             f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
             f"Прошло дней: {(datetime.now(timezone.utc) - user_info['last_changed']).days}"
