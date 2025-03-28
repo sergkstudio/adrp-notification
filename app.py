@@ -112,16 +112,9 @@ def convert_filetime(ft):
                 return ft
             # Если дата без часового пояса, добавляем UTC
             return ft.replace(tzinfo=timezone.utc)
-            
-        # Конвертируем FileTime в UTC
-        utc_time = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ft//10)
-        
-        # Конвертируем UTC в московское время
-        moscow_tz = timezone('Europe/Moscow')
-        moscow_time = utc_time.astimezone(moscow_tz)
-        
-        logger.debug(f"Конвертация FileTime {ft} в datetime: {moscow_time}")
-        return moscow_time
+        result = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ft//10)
+        logger.debug(f"Конвертация FileTime {ft} в datetime: {result}")
+        return result
     except Exception as e:
         logger.error(f"Ошибка при конвертации FileTime: {str(e)}")
         raise

@@ -8,7 +8,7 @@ services:
     env_file:
       - .env
     environment:
-      - TZ=${TZ}
+      - TZ=Europe/Moscow
     depends_on:
       - redis
     restart: unless-stopped
