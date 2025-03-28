@@ -1,5 +1,5 @@
 import os
-from ldap3 import Server, Connection, ALL
+from ldap3 import Server, Connection, ALL, MODIFY_REPLACE
 from datetime import datetime, timedelta, timezone
 import smtplib
 from email.mime.text import MIMEText
@@ -12,6 +12,11 @@ import requests
 import redis
 import json
 import pytz
+import random
+import string
+import ssl
+from ldap3.utils.dn import DN
+from ldap3.protocol.rfc2251 import Tls
 
 
 # Создание директории для логов, если она не существует
@@ -136,15 +141,35 @@ def get_ad_connection():
     """Устанавливает соединение с AD"""
     try:
         logger.info(f"Попытка подключения к AD серверу: {AD_CONFIG['server']}")
-        server = Server(AD_CONFIG['server'], get_info=ALL)
+        server = Server(
+            AD_CONFIG['server'],
+            get_info=ALL,
+            use_ssl=False,  # Отключаем SSL, так как будем использовать STARTTLS
+            tls=Tls(validate=ssl.CERT_NONE)  # Отключаем проверку сертификата
+        )
+        
         conn = Connection(
             server,
             user=AD_CONFIG['user'],
             password=AD_CONFIG['password'],
-            auto_bind=True
+            auto_bind=False  # Отключаем автоматическую привязку
         )
-        logger.info("Успешное подключение к AD")
-        return conn
+        
+        # Устанавливаем STARTTLS соединение
+        if conn.start_tls():
+            logger.info("STARTTLS соединение успешно установлено")
+        else:
+            logger.error("Не удалось установить STARTTLS соединение")
+            raise Exception("Ошибка установки STARTTLS соединения")
+            
+        # Выполняем привязку после установки STARTTLS
+        if conn.bind():
+            logger.info("Успешное подключение к AD")
+            return conn
+        else:
+            logger.error(f"Ошибка привязки к AD: {conn.result}")
+            raise Exception("Ошибка привязки к AD")
+            
     except Exception as e:
         logger.error(f"Ошибка при подключении к AD: {str(e)}")
         raise
@@ -159,6 +184,37 @@ def get_users_with_old_passwords():
     cutoff_date = current_date - timedelta(days=PASSWORD_AGE_DAYS)
     logger.info(f"Текущая дата: {current_date.strftime('%d.%m.%Y %H:%M:%S %Z')}")
     logger.info(f"Дата отсечки: {cutoff_date.strftime('%d.%m.%Y %H:%M:%S %Z')}")
+    
+    # Проверяем, указан ли тестовый пользователь
+    test_user_name = os.getenv('TEST_USER_NAME')
+    test_user_sn = os.getenv('TEST_USER_SN')
+    
+    if test_user_name and test_user_sn:
+        logger.info(f"Тестовый режим: поиск пользователя {test_user_name} {test_user_sn}")
+        search_filter = f'(&(objectCategory=person)(objectClass=user)(givenName={test_user_name})(sn={test_user_sn}))'
+        attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName', 'memberOf', 'givenName', 'sn']
+        
+        logger.info(f"Выполнение поиска в AD с фильтром: {search_filter}")
+        conn.search(AD_CONFIG['base_dn'], search_filter, attributes=attributes)
+        users = []
+        
+        for entry in conn.entries:
+            try:
+                pwd_last_set = convert_filetime(entry.pwdLastSet.value)
+                user_info = {
+                    'login': entry.sAMAccountName.value,
+                    'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
+                    'last_changed': pwd_last_set,
+                    'given_name': entry.givenName.value if hasattr(entry, 'givenName') and entry.givenName.value else '',
+                    'sn': entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else ''
+                }
+                users.append(user_info)
+                logger.info(f"Найден тестовый пользователь: {user_info['login']}, последняя смена: {user_info['last_changed']}")
+            except Exception as e:
+                logger.error(f"Ошибка при обработке тестового пользователя: {str(e)}")
+        
+        conn.unbind()
+        return users
     
     # Поиск групп из конфигурации
     target_groups_dn = []
@@ -224,9 +280,80 @@ def get_users_with_old_passwords():
     logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
     return users
 
+def generate_password(length=16):
+    """Генерирует случайный пароль"""
+    characters = string.ascii_letters + string.digits + "!@#$%^&*"
+    return ''.join(random.choice(characters) for _ in range(length))
+
+def change_user_password(conn, user_dn, new_password):
+    """Меняет пароль пользователя в AD"""
+    try:
+        # Формируем изменения для AD
+        changes = {
+            'unicodePwd': [(MODIFY_REPLACE, [new_password.encode('utf-16-le')])],
+            'pwdLastSet': [(MODIFY_REPLACE, [0])]  # Требует смены пароля при следующем входе
+        }
+        
+        # Применяем изменения
+        if conn.modify(user_dn, changes):
+            logger.info(f"Пароль успешно изменен для пользователя {user_dn}")
+            return True
+        else:
+            logger.error(f"Ошибка при изменении пароля для пользователя {user_dn}: {conn.result}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при изменении пароля: {str(e)}")
+        return False
+
+def get_notification_count(user_login):
+    """Получает количество отправленных уведомлений для пользователя"""
+    try:
+        count = redis_client.get(f"notification_count:{user_login}")
+        return int(count) if count else 0
+    except Exception as e:
+        logger.error(f"Ошибка при получении количества уведомлений: {str(e)}")
+        return 0
+
+def increment_notification_count(user_login):
+    """Увеличивает счетчик отправленных уведомлений"""
+    try:
+        current_count = get_notification_count(user_login)
+        new_count = current_count + 1
+        redis_client.setex(f"notification_count:{user_login}", 86400 * 30, new_count)  # Храним 30 дней
+        return new_count
+    except Exception as e:
+        logger.error(f"Ошибка при увеличении счетчика уведомлений: {str(e)}")
+        return 0
+
+def reset_notification_count(user_login):
+    """Сбрасывает счетчик отправленных уведомлений"""
+    try:
+        redis_client.delete(f"notification_count:{user_login}")
+        logger.info(f"Счетчик уведомлений сброшен для пользователя {user_login}")
+    except Exception as e:
+        logger.error(f"Ошибка при сбросе счетчика уведомлений: {str(e)}")
+
 def send_notification(email, login, given_name='', sn='', last_changed=None):
     """Отправляет email-уведомление"""
     logger.info(f"Подготовка отправки уведомления пользователю {login} на email {email}")
+    
+    # Проверяем количество отправленных уведомлений
+    notification_count = get_notification_count(login)
+    if notification_count >= 5:
+        logger.warning(f"Пользователь {login} получил уже 5 уведомлений. Генерируем новый пароль.")
+        
+        # Получаем подключение к AD
+        conn = get_ad_connection()
+        
+        # Генерируем новый пароль
+        new_password = generate_password()
+        
+        # Получаем DN пользователя
+        conn.search(AD_CONFIG['base_dn'], f'(sAMAccountName={login})', attributes=['distinguishedName'])
+        if not conn.entries:
+            logger.error(f"Пользователь {login} не найден в AD")
+            return
+            
     subject = "Требуется смена пароля"
     
     # Формируем полное имя пользователя
@@ -243,7 +370,12 @@ def send_notification(email, login, given_name='', sn='', last_changed=None):
         days_passed = PASSWORD_AGE_DAYS
         
     body = f"""<p style="font-weight: 400;">{full_name}!</p>
-"""
+<p style="font-weight: 400;"><strong>Вам необходимо сменить свой пароль для доступа к информационным системам.</strong></p>
+<p style="font-weight: 400;">Последняя смена пароля: <span style="color: #ff0000;">{last_changed_str}</span></p>
+<p style="font-weight: 400;">Прошло дней с последней смены пароля: <span style="color: #ff0000;">{days_passed}</span></p>
+<p style="font-weight: 400;">Для смены пароля нажмите на ссылку: <a href="https://password.adrp.ru">https://password.adrp.ru</a></p>
+<p style="font-weight: 400;"><strong>Внимание!</strong> Рекомендуется менять пароль не реже чем раз в 180 дней.</p>
+<p style="font-weight: 400;">Если вы не запрашивали смену пароля, проигнорируйте это письмо.</p>"""
 
     msg = MIMEText(body, 'html', 'utf-8')
     msg['Subject'] = subject
@@ -258,6 +390,8 @@ def send_notification(email, login, given_name='', sn='', last_changed=None):
             server.login(SMTP_CONFIG['user'], SMTP_CONFIG['password'])
             server.send_message(msg)
         logger.info(f"Уведомление успешно отправлено пользователю {login}")
+        # Увеличиваем счетчик отправленных уведомлений
+        increment_notification_count(login)
     except Exception as e:
         logger.error(f"Ошибка при отправке email пользователю {login}: {str(e)}")
 
