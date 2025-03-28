@@ -1,10 +1,17 @@
 version: '3.8'
 
 services:
-  password_notifier:
+  app:
     build: .
-    env_file: .env
-    restart: always
+    volumes:
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ}
+    depends_on:
+      - redis
+    restart: unless-stopped
 
   redis:
     image: redis:alpine

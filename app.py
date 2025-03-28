@@ -206,27 +206,28 @@ def get_users_with_old_passwords():
     logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
     return users
 
-def send_notification(email, login, given_name='', sn=''):
+def send_notification(email, login, given_name='', sn='', last_changed=None):
     """Отправляет email-уведомление"""
     logger.info(f"Подготовка отправки уведомления пользователю {login} на email {email}")
-    subject = "[ТЕСТ] Требуется смена пароля"
+    subject = "Требуется смена пароля"
     
     # Формируем полное имя пользователя
     full_name = f"{given_name} {sn}".strip()
     if not full_name:
         full_name = login
         
-    body = f"""Уважаемый {full_name},
+    # Используем реальную дату последней смены пароля из AD
+    if last_changed:
+        last_changed_str = last_changed.strftime('%d.%m.%Y %H:%M:%S')
+        days_passed = (datetime.now(timezone.utc) - last_changed).days
+    else:
+        last_changed_str = "неизвестно"
+        days_passed = PASSWORD_AGE_DAYS
+        
+    body = f"""<p style="font-weight: 400;">{full_name}!</p>
+"""
     
-Ваш пароль в системе был изменен более {PASSWORD_AGE_DAYS} дней назад.
-Пожалуйста, выполните смену пароля в ближайшее время.
-
-Это тестовое сообщение. Проигнорируйте его.
-
-С уважением,
-IT-отдел Domain.example"""
-    
-    msg = MIMEText(body)
+    msg = MIMEText(body, 'html', 'utf-8')
     msg['Subject'] = subject
     msg['From'] = SMTP_CONFIG['from_email']
     msg['To'] = email
@@ -409,7 +410,8 @@ def main_loop():
                     user['email'], 
                     user['login'],
                     user['given_name'],
-                    user['sn']
+                    user['sn'],
+                    user['last_changed']
                 )
                 send_telegram_notification(user)
                 # Добавляем задержку между отправкой сообщений в Telegram (3 секунды)
