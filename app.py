@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import requests
 import redis
 import json
+import pytz
 
 # Создание директории для логов, если она не существует
 os.makedirs('logs', exist_ok=True)
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 logger.info("Загрузка переменных окружения...")
 load_dotenv()
 logger.info("Переменные окружения успешно загружены")
+
+# Получение системного часового пояса
+local_tz = pytz.timezone(os.getenv('TZ', 'Europe/Moscow'))
 
 # Конфигурационные параметры
 AD_CONFIG = {
@@ -109,10 +113,9 @@ def convert_filetime(ft):
             # Если дата уже имеет часовой пояс, возвращаем как есть
             if ft.tzinfo is not None:
                 return ft
-            # Если дата без часового пояса, добавляем часовой пояс из переменной окружения
-            return ft.replace(tzinfo=timezone(os.getenv('TZ', 'Europe/Moscow')))
-        # Конвертируем FileTime в datetime с учетом часового пояса
-        result = datetime(1601, 1, 1, tzinfo=timezone(os.getenv('TZ', 'Europe/Moscow'))) + timedelta(microseconds=ft//10)
+            # Если дата без часового пояса, добавляем системный часовой пояс
+            return local_tz.localize(ft)
+        result = datetime(1601, 1, 1, tzinfo=local_tz) + timedelta(microseconds=ft//10)
         logger.debug(f"Конвертация FileTime {ft} в datetime: {result}")
         return result
     except Exception as e:
@@ -187,7 +190,7 @@ def get_users_with_old_passwords():
                 continue
                 
             pwd_last_set = convert_filetime(entry.pwdLastSet.value)
-            current_time = datetime.now(timezone.utc)
+            current_time = datetime.now(local_tz)
             delta = current_time - pwd_last_set
             
             if delta.days >= PASSWORD_AGE_DAYS:
@@ -220,14 +223,14 @@ def send_notification(email, login, given_name='', sn='', last_changed=None):
     # Используем реальную дату последней смены пароля из AD
     if last_changed:
         last_changed_str = last_changed.strftime('%d.%m.%Y %H:%M:%S')
-        days_passed = (datetime.now(timezone.utc) - last_changed).days
+        days_passed = (datetime.now(local_tz) - last_changed).days
     else:
         last_changed_str = "неизвестно"
         days_passed = PASSWORD_AGE_DAYS
         
     body = f"""<p style="font-weight: 400;">{full_name}!</p>
 """
-    
+
     msg = MIMEText(body, 'html', 'utf-8')
     msg['Subject'] = subject
     msg['From'] = SMTP_CONFIG['from_email']
@@ -318,7 +321,7 @@ def send_telegram_notification(user_info):
             f"Пользователь: {full_name}\n"
             f"Email: {user_info['email']}\n"
             f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
-            f"Прошло дней: {(datetime.now(timezone.utc) - user_info['last_changed']).days}"
+            f"Прошло дней: {(datetime.now(local_tz) - user_info['last_changed']).days}"
         )
         
         url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/sendMessage"
@@ -341,7 +344,7 @@ def send_telegram_notification(user_info):
                         'user_login': user_info['login'],
                         'user_email': user_info['email'],
                         'user_name': full_name,
-                        'sent_at': datetime.now(timezone.utc).isoformat(),
+                        'sent_at': datetime.now(local_tz).isoformat(),
                         'password_last_changed': user_info['last_changed'].isoformat()
                     }
                     
