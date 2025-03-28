@@ -66,18 +66,40 @@ CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL'))
 
 logger.info("Логирование настроено")
 
+def init_redis_connection(max_retries=3, retry_delay=5):
+    """Инициализация подключения к Redis с повторными попытками"""
+    for attempt in range(max_retries):
+        try:
+            redis_client = redis.Redis(
+                host=REDIS_CONFIG['host'],
+                port=REDIS_CONFIG['port'],
+                db=REDIS_CONFIG['db'],
+                password=REDIS_CONFIG['password'],
+                decode_responses=True,
+                socket_timeout=5,
+                socket_connect_timeout=5
+            )
+            # Проверяем подключение
+            redis_client.ping()
+            logger.info("Успешное подключение к Redis")
+            return redis_client
+        except redis.ConnectionError as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Попытка подключения к Redis {attempt + 1}/{max_retries} не удалась: {str(e)}")
+                logger.info(f"Повторная попытка через {retry_delay} секунд...")
+                time.sleep(retry_delay)
+            else:
+                logger.error(f"Не удалось подключиться к Redis после {max_retries} попыток: {str(e)}")
+                raise
+        except Exception as e:
+            logger.error(f"Неожиданная ошибка при подключении к Redis: {str(e)}")
+            raise
+
 # Инициализация Redis
 try:
-    redis_client = redis.Redis(
-        host=REDIS_CONFIG['host'],
-        port=REDIS_CONFIG['port'],
-        db=REDIS_CONFIG['db'],
-        password=REDIS_CONFIG['password'],
-        decode_responses=True
-    )
-    logger.info("Успешное подключение к Redis")
+    redis_client = init_redis_connection()
 except Exception as e:
-    logger.error(f"Ошибка при подключении к Redis: {str(e)}")
+    logger.error(f"Критическая ошибка при инициализации Redis: {str(e)}")
     raise
 
 def convert_filetime(ft):
@@ -217,6 +239,9 @@ IT-отдел Domain.example"""
 def find_user_messages_in_chat(user_login):
     """Поиск сообщений о пользователе в чате"""
     try:
+        # Проверяем подключение к Redis
+        redis_client.ping()
+        
         # Получаем все ключи из Redis, связанные с уведомлениями
         keys = redis_client.keys("telegram_notification:*")
         user_messages = []
@@ -230,6 +255,9 @@ def find_user_messages_in_chat(user_login):
                 })
         
         return user_messages
+    except redis.ConnectionError as e:
+        logger.error(f"Ошибка подключения к Redis при поиске сообщений: {str(e)}")
+        return []
     except Exception as e:
         logger.error(f"Ошибка при поиске сообщений пользователя {user_login}: {str(e)}")
         return []
@@ -257,15 +285,21 @@ def delete_telegram_message(message_id):
 def send_telegram_notification(user_info):
     """Отправляет уведомление в Telegram"""
     try:
+        # Проверяем подключение к Redis
+        redis_client.ping()
+        
         # Поиск существующих сообщений о пользователе
         existing_messages = find_user_messages_in_chat(user_info['login'])
         
         # Удаляем старые сообщения
         for message in existing_messages:
             if delete_telegram_message(message['message_id']):
-                # Удаляем информацию из Redis
-                redis_client.delete(message['key'])
-                logger.info(f"Удалена информация о сообщении {message['message_id']} из Redis")
+                try:
+                    # Удаляем информацию из Redis
+                    redis_client.delete(message['key'])
+                    logger.info(f"Удалена информация о сообщении {message['message_id']} из Redis")
+                except redis.ConnectionError as e:
+                    logger.error(f"Ошибка подключения к Redis при удалении сообщения: {str(e)}")
         
         full_name = f"{user_info['given_name']} {user_info['sn']}".strip()
         if not full_name:
@@ -292,24 +326,27 @@ def send_telegram_notification(user_info):
             message_id = response_data.get('result', {}).get('message_id')
             
             if message_id:
-                # Сохраняем информацию о сообщении в Redis
-                notification_data = {
-                    'message_id': message_id,
-                    'user_login': user_info['login'],
-                    'user_email': user_info['email'],
-                    'user_name': full_name,
-                    'sent_at': datetime.now(timezone.utc).isoformat(),
-                    'password_last_changed': user_info['last_changed'].isoformat()
-                }
-                
-                # Используем message_id как ключ
-                redis_key = f"telegram_notification:{message_id}"
-                redis_client.setex(
-                    redis_key,
-                    60 * 60 * 24 * 30,  # Храним 30 дней
-                    json.dumps(notification_data)
-                )
-                logger.info(f"Информация о сообщении {message_id} сохранена в Redis")
+                try:
+                    # Сохраняем информацию о сообщении в Redis
+                    notification_data = {
+                        'message_id': message_id,
+                        'user_login': user_info['login'],
+                        'user_email': user_info['email'],
+                        'user_name': full_name,
+                        'sent_at': datetime.now(timezone.utc).isoformat(),
+                        'password_last_changed': user_info['last_changed'].isoformat()
+                    }
+                    
+                    # Используем message_id как ключ
+                    redis_key = f"telegram_notification:{message_id}"
+                    redis_client.setex(
+                        redis_key,
+                        60 * 60 * 24 * 30,  # Храним 30 дней
+                        json.dumps(notification_data)
+                    )
+                    logger.info(f"Информация о сообщении {message_id} сохранена в Redis")
+                except redis.ConnectionError as e:
+                    logger.error(f"Ошибка подключения к Redis при сохранении сообщения: {str(e)}")
             
             logger.info(f"Уведомление в Telegram успешно отправлено для пользователя {user_info['login']}")
         else:
