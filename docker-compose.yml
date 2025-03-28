@@ -5,6 +5,12 @@ services:
     build: .
     env_file: .env
     restart: always
+    environment:
+      - TZ=Europe/Moscow
+    depends_on:
+      - redis
+    volumes:
+      - ./logs:/app/logs
 
   redis:
     image: redis:alpine
