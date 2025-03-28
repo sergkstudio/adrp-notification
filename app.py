@@ -109,9 +109,10 @@ def convert_filetime(ft):
             # Если дата уже имеет часовой пояс, возвращаем как есть
             if ft.tzinfo is not None:
                 return ft
-            # Если дата без часового пояса, добавляем UTC
-            return ft.replace(tzinfo=timezone.utc)
-        result = datetime(1601, 1, 1, tzinfo=timezone.utc) + timedelta(microseconds=ft//10)
+            # Если дата без часового пояса, добавляем часовой пояс из переменной окружения
+            return ft.replace(tzinfo=timezone(os.getenv('TZ', 'Europe/Moscow')))
+        # Конвертируем FileTime в datetime с учетом часового пояса
+        result = datetime(1601, 1, 1, tzinfo=timezone(os.getenv('TZ', 'Europe/Moscow'))) + timedelta(microseconds=ft//10)
         logger.debug(f"Конвертация FileTime {ft} в datetime: {result}")
         return result
     except Exception as e:
