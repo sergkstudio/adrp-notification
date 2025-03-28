@@ -5,3 +5,13 @@ services:
     build: .
     env_file: .env
     restart: always
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - ./redis/data:/data
+      - ./redis:/usr/local/etc/redis
+    command:
+      - redis-server
+      - /usr/local/etc/redis/redis.conf
+    restart: unless-stopped
