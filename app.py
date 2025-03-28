@@ -191,6 +191,51 @@ IT-отдел Domain.example"""
     except Exception as e:
         logger.error(f"Ошибка при отправке email пользователю {login}: {str(e)}")
 
+def get_telegram_messages(limit=100):
+    """Получает последние сообщения из чата"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/getUpdates"
+        params = {
+            "chat_id": TELEGRAM_CONFIG['chat_id'],
+            "limit": limit
+        }
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            return response.json().get('result', [])
+        return []
+    except Exception as e:
+        logger.error(f"Ошибка при получении сообщений из Telegram: {str(e)}")
+        return []
+
+def delete_telegram_message(message_id):
+    """Удаляет сообщение из чата"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/deleteMessage"
+        data = {
+            "chat_id": TELEGRAM_CONFIG['chat_id'],
+            "message_id": message_id
+        }
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            logger.info(f"Сообщение {message_id} успешно удалено")
+            return True
+        else:
+            logger.error(f"Ошибка при удалении сообщения {message_id}: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при удалении сообщения {message_id}: {str(e)}")
+        return False
+
+def find_user_message_in_chat(user_info):
+    """Ищет сообщение о пользователе в чате"""
+    messages = get_telegram_messages()
+    for message in messages:
+        if 'message' in message and 'text' in message['message']:
+            text = message['message']['text']
+            if user_info['login'] in text and user_info['email'] in text:
+                return message['message']['message_id']
+    return None
+
 def send_telegram_notification(user_info):
     """Отправляет уведомление в Telegram"""
     try:
@@ -201,10 +246,20 @@ def send_telegram_notification(user_info):
         message = (
             f"🔔 Уведомление о устаревшем пароле\n\n"
             f"Пользователь: {full_name}\n"
+            f"Логин: {user_info['login']}\n"
             f"Email: {user_info['email']}\n"
             f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
             f"Прошло дней: {(datetime.now(timezone.utc) - user_info['last_changed']).days}"
         )
+        
+        # Ищем существующее сообщение о пользователе
+        existing_message_id = find_user_message_in_chat(user_info)
+        
+        # Если сообщение существует, удаляем его
+        if existing_message_id:
+            logger.info(f"Найдено существующее сообщение для пользователя {user_info['login']}, удаляем его")
+            delete_telegram_message(existing_message_id)
+            time.sleep(1)  # Небольшая задержка перед отправкой нового сообщения
         
         url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/sendMessage"
         data = {
