@@ -9,6 +9,7 @@ from logging.handlers import RotatingFileHandler
 import time
 from dotenv import load_dotenv
 import requests
+import json
 
 # Создание директории для логов, если она не существует
 os.makedirs('logs', exist_ok=True)
@@ -54,6 +55,9 @@ TELEGRAM_CONFIG = {
 EMAIL_DOMAIN = os.getenv('EMAIL_DOMAIN')
 PASSWORD_AGE_DAYS = int(os.getenv('PASSWORD_AGE_DAYS'))
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL'))
+
+# Добавляем путь к файлу с ID сообщений
+MESSAGES_FILE = 'message_ids.json'
 
 logger.info("Логирование настроено")
 
@@ -194,7 +198,7 @@ IT-отдел Domain.example"""
 def get_telegram_messages(limit=100):
     """Получает последние сообщения из чата"""
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/getUpdates"
+        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/getChatMessages"
         params = {
             "chat_id": TELEGRAM_CONFIG['chat_id'],
             "limit": limit
@@ -202,39 +206,37 @@ def get_telegram_messages(limit=100):
         response = requests.get(url, params=params)
         if response.status_code == 200:
             return response.json().get('result', [])
-        return []
+        else:
+            logger.error(f"Ошибка при получении сообщений: {response.text}")
+            return []
     except Exception as e:
         logger.error(f"Ошибка при получении сообщений из Telegram: {str(e)}")
         return []
 
-def delete_telegram_message(message_id):
-    """Удаляет сообщение из чата"""
+def load_message_ids():
+    """Загружает ID сообщений из файла"""
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/deleteMessage"
-        data = {
-            "chat_id": TELEGRAM_CONFIG['chat_id'],
-            "message_id": message_id
-        }
-        response = requests.post(url, data=data)
-        if response.status_code == 200:
-            logger.info(f"Сообщение {message_id} успешно удалено")
-            return True
-        else:
-            logger.error(f"Ошибка при удалении сообщения {message_id}: {response.text}")
-            return False
+        if os.path.exists(MESSAGES_FILE):
+            with open(MESSAGES_FILE, 'r') as f:
+                return json.load(f)
+        return {}
     except Exception as e:
-        logger.error(f"Ошибка при удалении сообщения {message_id}: {str(e)}")
-        return False
+        logger.error(f"Ошибка при загрузке ID сообщений: {str(e)}")
+        return {}
+
+def save_message_ids(message_ids):
+    """Сохраняет ID сообщений в файл"""
+    try:
+        with open(MESSAGES_FILE, 'w') as f:
+            json.dump(message_ids, f)
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении ID сообщений: {str(e)}")
 
 def find_user_message_in_chat(user_info):
     """Ищет сообщение о пользователе в чате"""
-    messages = get_telegram_messages()
-    for message in messages:
-        if 'message' in message and 'text' in message['message']:
-            text = message['message']['text']
-            if user_info['login'] in text and user_info['email'] in text:
-                return message['message']['message_id']
-    return None
+    message_ids = load_message_ids()
+    user_key = f"{user_info['login']}_{user_info['email']}"
+    return message_ids.get(user_key)
 
 def send_telegram_notification(user_info):
     """Отправляет уведомление в Telegram"""
@@ -270,11 +272,35 @@ def send_telegram_notification(user_info):
         
         response = requests.post(url, data=data)
         if response.status_code == 200:
+            # Сохраняем ID нового сообщения
+            message_ids = load_message_ids()
+            user_key = f"{user_info['login']}_{user_info['email']}"
+            message_ids[user_key] = response.json()['result']['message_id']
+            save_message_ids(message_ids)
             logger.info(f"Уведомление в Telegram успешно отправлено для пользователя {user_info['login']}")
         else:
             logger.error(f"Ошибка при отправке уведомления в Telegram: {response.text}")
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления в Telegram: {str(e)}")
+
+def delete_telegram_message(message_id):
+    """Удаляет сообщение из чата"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_CONFIG['bot_token']}/deleteMessage"
+        data = {
+            "chat_id": TELEGRAM_CONFIG['chat_id'],
+            "message_id": message_id
+        }
+        response = requests.post(url, data=data)
+        if response.status_code == 200:
+            logger.info(f"Сообщение {message_id} успешно удалено")
+            return True
+        else:
+            logger.error(f"Ошибка при удалении сообщения {message_id}: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при удалении сообщения {message_id}: {str(e)}")
+        return False
 
 def main_loop():
     """Основной цикл проверки"""
