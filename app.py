@@ -115,7 +115,7 @@ def get_users_with_old_passwords():
         '(!(userAccountControl:1.2.840.113556.1.4.803:=2)))'
     )
     
-    attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName', 'memberOf']
+    attributes = ['sAMAccountName', 'mail', 'pwdLastSet', 'distinguishedName', 'memberOf', 'givenName', 'sn']
     
     logger.info(f"Выполнение поиска в AD с фильтром: {search_filter}")
     conn.search(AD_CONFIG['base_dn'], search_filter, attributes=attributes)
@@ -148,7 +148,9 @@ def get_users_with_old_passwords():
                 user_info = {
                     'login': entry.sAMAccountName.value,
                     'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
-                    'last_changed': pwd_last_set
+                    'last_changed': pwd_last_set,
+                    'given_name': entry.givenName.value if hasattr(entry, 'givenName') and entry.givenName.value else '',
+                    'sn': entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else ''
                 }
                 users.append(user_info)
                 logger.info(f"Найден пользователь с устаревшим паролем: {user_info['login']}, последняя смена: {user_info['last_changed']}")
@@ -192,9 +194,14 @@ IT-отдел Domain.example"""
 def send_telegram_notification(user_info):
     """Отправляет уведомление в Telegram"""
     try:
+        full_name = f"{user_info['given_name']} {user_info['sn']}".strip()
+        if not full_name:
+            full_name = user_info['login']
+            
         message = (
             f"🔔 Уведомление о устаревшем пароле\n\n"
-            f"Пользователь: {user_info['login']}\n"
+            f"Пользователь: {full_name}\n"
+            f"Логин: {user_info['login']}\n"
             f"Email: {user_info['email']}\n"
             f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
             f"Прошло дней: {(datetime.now(timezone.utc) - user_info['last_changed']).days}"
@@ -222,9 +229,13 @@ def main_loop():
         try:
             logger.info("Начало новой итерации проверки паролей")
             users = get_users_with_old_passwords()
-            for user in users:
+            for i, user in enumerate(users):
                 send_notification(user['email'], user['login'])
                 send_telegram_notification(user)
+                # Добавляем задержку между отправкой сообщений в Telegram (3 секунды)
+                if i < len(users) - 1:  # Не ждем после последнего сообщения
+                    logger.debug("Ожидание 3 секунды перед отправкой следующего сообщения в Telegram")
+                    time.sleep(3)
             logger.info(f"Итерация завершена. Обработано пользователей: {len(users)}")
         except Exception as e:
             logger.error(f"Критическая ошибка в основном цикле: {str(e)}")
