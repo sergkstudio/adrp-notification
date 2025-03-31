@@ -280,7 +280,13 @@ def send_notification(email, login, given_name='', sn='', last_changed=None):
     notification_count = increment_notification_count(login)
         
     body = f"""<p style="font-weight: 400;">{full_name}!</p>
-"""
+<p style="font-weight: 400;"><strong>Вам необходимо сменить свой пароль для доступа к информационным системам.</strong></p>
+<p style="font-weight: 400;">Последняя смена пароля: <span style="color: #ff0000;">{last_changed_str}</span></p>
+<p style="font-weight: 400;">Прошло дней с последней смены пароля: <span style="color: #ff0000;">{days_passed}</span></p>
+<p style="font-weight: 400;">Для смены пароля нажмите на ссылку: <a href="https://password.adrp.ru">https://password.adrp.ru</a></p>
+<p style="font-weight: 400;"><strong>Внимание!</strong> Рекомендуется менять пароль не реже чем раз в 180 дней.</p>
+<p style="font-weight: 400;">Если вы не запрашивали смену пароля, проигнорируйте это письмо.</p>
+<p style="font-weight: 400;">Это уведомление #{notification_count}.</p>"""
 
     msg = MIMEText(body, 'html', 'utf-8')
     msg['Subject'] = subject
