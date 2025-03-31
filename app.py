@@ -1,5 +1,5 @@
 import os
-from ldap3 import Server, Connection, ALL
+from ldap3 import Server, Connection, ALL, MODIFY_REPLACE
 from datetime import datetime, timedelta, timezone
 import smtplib
 from email.mime.text import MIMEText
@@ -12,6 +12,8 @@ import requests
 import redis
 import json
 import pytz
+import secrets
+import string
 
 
 # Создание директории для логов, если она не существует
@@ -149,6 +151,62 @@ def get_ad_connection():
         logger.error(f"Ошибка при подключении к AD: {str(e)}")
         raise
 
+def generate_password(length=16):
+    """Генерирует случайный пароль заданной длины"""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()_+-=[]{}|;:,.<>?"
+    while True:
+        password = ''.join(secrets.choice(alphabet) for _ in range(length))
+        # Проверяем, что пароль содержит как минимум одну цифру и один специальный символ
+        if (any(c.isdigit() for c in password) and 
+            any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password)):
+            return password
+
+def reset_ad_password(conn, user_dn, new_password):
+    """Сбрасывает пароль пользователя в AD"""
+    try:
+        # Формируем изменения для AD
+        changes = {
+            'unicodePwd': [(MODIFY_REPLACE, [new_password.encode('utf-16-le')])],
+        }
+        
+        # Применяем изменения
+        if conn.modify(user_dn, changes):
+            logger.info(f"Пароль успешно сброшен для пользователя {user_dn}")
+            return True
+        else:
+            logger.error(f"Ошибка при сбросе пароля для пользователя {user_dn}: {conn.result}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при сбросе пароля для пользователя {user_dn}: {str(e)}")
+        return False
+
+def check_and_reset_password(user_login, user_dn):
+    """Проверяет счетчик уведомлений и сбрасывает пароль при достижении лимита"""
+    try:
+        notification_count = get_notification_count(user_login)
+        if notification_count >= 5:
+            logger.info(f"Достигнут лимит уведомлений ({notification_count}) для пользователя {user_login}")
+            
+            # Генерируем новый пароль
+            new_password = generate_password()
+            
+            # Получаем соединение с AD
+            conn = get_ad_connection()
+            
+            # Сбрасываем пароль
+            if reset_ad_password(conn, user_dn, new_password):
+                # Сбрасываем счетчик уведомлений
+                reset_notification_count(user_login)
+                logger.info(f"Счетчик уведомлений сброшен для пользователя {user_login}")
+            else:
+                logger.error(f"Не удалось сбросить пароль для пользователя {user_login}")
+            
+            conn.unbind()
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка при проверке и сбросе пароля для пользователя {user_login}: {str(e)}")
+    return False
+
 def get_users_with_old_passwords():
     """Возвращает пользователей с паролями старше заданного срока"""
     logger.info("Начало поиска пользователей с устаревшими паролями")
@@ -213,8 +271,14 @@ def get_users_with_old_passwords():
                     'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
                     'last_changed': pwd_last_set,
                     'given_name': entry.givenName.value if hasattr(entry, 'givenName') and entry.givenName.value else '',
-                    'sn': entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else ''
+                    'sn': entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else '',
+                    'dn': entry.distinguishedName.value
                 }
+                
+                # Проверяем необходимость сброса пароля
+                if check_and_reset_password(user_info['login'], user_info['dn']):
+                    continue  # Пропускаем отправку уведомлений, если пароль был сброшен
+                    
                 users.append(user_info)
                 logger.info(f"Найден пользователь с устаревшим паролем: {user_info['login']}, последняя смена: {user_info['last_changed']}")
         except Exception as e:
