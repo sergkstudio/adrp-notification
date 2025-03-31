@@ -151,62 +151,6 @@ def get_ad_connection():
         logger.error(f"Ошибка при подключении к AD: {str(e)}")
         raise
 
-def generate_password(length=16):
-    """Генерирует случайный пароль заданной длины"""
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()_+-=[]{}|;:,.<>?"
-    while True:
-        password = ''.join(secrets.choice(alphabet) for _ in range(length))
-        # Проверяем, что пароль содержит как минимум одну цифру и один специальный символ
-        if (any(c.isdigit() for c in password) and 
-            any(c in "!@#$%^&*()_+-=[]{}|;:,.<>?" for c in password)):
-            return password
-
-def reset_ad_password(conn, user_dn, new_password):
-    """Сбрасывает пароль пользователя в AD"""
-    try:
-        # Формируем изменения для AD
-        changes = {
-            'unicodePwd': [(MODIFY_REPLACE, [new_password.encode('utf-16-le')])],
-        }
-        
-        # Применяем изменения
-        if conn.modify(user_dn, changes):
-            logger.info(f"Пароль успешно сброшен для пользователя {user_dn}")
-            return True
-        else:
-            logger.error(f"Ошибка при сбросе пароля для пользователя {user_dn}: {conn.result}")
-            return False
-    except Exception as e:
-        logger.error(f"Ошибка при сбросе пароля для пользователя {user_dn}: {str(e)}")
-        return False
-
-def check_and_reset_password(user_login, user_dn):
-    """Проверяет счетчик уведомлений и сбрасывает пароль при достижении лимита"""
-    try:
-        notification_count = get_notification_count(user_login)
-        if notification_count >= 5:
-            logger.info(f"Достигнут лимит уведомлений ({notification_count}) для пользователя {user_login}")
-            
-            # Генерируем новый пароль
-            new_password = generate_password()
-            
-            # Получаем соединение с AD
-            conn = get_ad_connection()
-            
-            # Сбрасываем пароль
-            if reset_ad_password(conn, user_dn, new_password):
-                # Сбрасываем счетчик уведомлений
-                reset_notification_count(user_login)
-                logger.info(f"Счетчик уведомлений сброшен для пользователя {user_login}")
-            else:
-                logger.error(f"Не удалось сбросить пароль для пользователя {user_login}")
-            
-            conn.unbind()
-            return True
-    except Exception as e:
-        logger.error(f"Ошибка при проверке и сбросе пароля для пользователя {user_login}: {str(e)}")
-    return False
-
 def get_users_with_old_passwords():
     """Возвращает пользователей с паролями старше заданного срока"""
     logger.info("Начало поиска пользователей с устаревшими паролями")
@@ -271,14 +215,8 @@ def get_users_with_old_passwords():
                     'email': entry.mail.value or f"{entry.sAMAccountName.value}{EMAIL_DOMAIN}",
                     'last_changed': pwd_last_set,
                     'given_name': entry.givenName.value if hasattr(entry, 'givenName') and entry.givenName.value else '',
-                    'sn': entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else '',
-                    'dn': entry.distinguishedName.value
+                    'sn': entry.sn.value if hasattr(entry, 'sn') and entry.sn.value else ''
                 }
-                
-                # Проверяем необходимость сброса пароля
-                if check_and_reset_password(user_info['login'], user_info['dn']):
-                    continue  # Пропускаем отправку уведомлений, если пароль был сброшен
-                    
                 users.append(user_info)
                 logger.info(f"Найден пользователь с устаревшим паролем: {user_info['login']}, последняя смена: {user_info['last_changed']}")
         except Exception as e:
@@ -516,6 +454,67 @@ def check_and_cleanup_old_messages(users_with_old_passwords):
     except Exception as e:
         logger.error(f"Ошибка при проверке старых сообщений: {str(e)}")
 
+def generate_password(length=16):
+    """Генерирует случайный пароль заданной длины"""
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    # Убедимся, что пароль содержит как минимум один символ каждого типа
+    password = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        secrets.choice(string.punctuation)
+    ]
+    # Добавим остальные символы
+    for _ in range(length - len(password)):
+        password.append(secrets.choice(alphabet))
+    # Перемешаем символы
+    secrets.SystemRandom().shuffle(password)
+    return ''.join(password)
+
+def change_user_password(conn, user_dn, new_password):
+    """Меняет пароль пользователя в AD"""
+    try:
+        # Кодируем пароль в UTF-16-LE
+        unicode_password = f'"{new_password}"'.encode('utf-16-le')
+        changes = {'unicodePwd': [(MODIFY_REPLACE, [unicode_password])]}
+        
+        if conn.modify(user_dn, changes):
+            logger.info(f"Пароль успешно изменен для пользователя {user_dn}")
+            return True
+        else:
+            logger.error(f"Ошибка при смене пароля: {conn.result}")
+            return False
+    except Exception as e:
+        logger.error(f"Ошибка при смене пароля: {str(e)}")
+        return False
+
+def get_user_dn(conn, username, base_dn):
+    """Получает DN пользователя"""
+    try:
+        search_filter = f'(&(objectClass=user)(sAMAccountName={username}))'
+        conn.search(base_dn, search_filter, attributes=['distinguishedName'])
+        if conn.entries:
+            return conn.entries[0].distinguishedName.value
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при поиске DN пользователя: {str(e)}")
+        return None
+
+def handle_notification_count(user_login, user_dn, conn):
+    """Обрабатывает счетчик уведомлений и меняет пароль при необходимости"""
+    try:
+        count = get_notification_count(user_login)
+        if count >= 5:
+            logger.info(f"Достигнут лимит уведомлений ({count}) для пользователя {user_login}")
+            new_password = generate_password()
+            if change_user_password(conn, user_dn, new_password):
+                reset_notification_count(user_login)
+                logger.info(f"Пароль успешно изменен для пользователя {user_login}")
+            else:
+                logger.error(f"Не удалось изменить пароль для пользователя {user_login}")
+    except Exception as e:
+        logger.error(f"Ошибка при обработке счетчика уведомлений: {str(e)}")
+
 def main_loop():
     """Основной цикл проверки"""
     logger.info("Запуск основного цикла проверки")
@@ -527,7 +526,16 @@ def main_loop():
             # Проверяем и удаляем сообщения о пользователях с обновленными паролями
             check_and_cleanup_old_messages(users)
             
+            # Получаем подключение к AD для смены паролей
+            conn = get_ad_connection()
+            
             for i, user in enumerate(users):
+                # Получаем DN пользователя
+                user_dn = get_user_dn(conn, user['login'], AD_CONFIG['base_dn'])
+                if user_dn:
+                    # Проверяем счетчик уведомлений и меняем пароль при необходимости
+                    handle_notification_count(user['login'], user_dn, conn)
+                
                 send_notification(
                     user['email'], 
                     user['login'],
@@ -540,6 +548,8 @@ def main_loop():
                 if i < len(users) - 1:  # Не ждем после последнего сообщения
                     logger.debug("Ожидание 3 секунды перед отправкой следующего сообщения в Telegram")
                     time.sleep(3)
+            
+            conn.unbind()
             logger.info(f"Итерация завершена. Обработано пользователей: {len(users)}")
         except Exception as e:
             logger.error(f"Критическая ошибка в основном цикле: {str(e)}")
