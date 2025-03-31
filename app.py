@@ -145,7 +145,9 @@ def get_ad_connection():
             password=AD_CONFIG['password'],
             auto_bind=True
         )
-        logger.info("Успешное подключение к AD")
+        # Включаем TLS для безопасного соединения
+        conn.start_tls()
+        logger.info("Успешное подключение к AD с TLS")
         return conn
     except Exception as e:
         logger.error(f"Ошибка при подключении к AD: {str(e)}")
