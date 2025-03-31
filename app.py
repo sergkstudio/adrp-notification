@@ -224,6 +224,35 @@ def get_users_with_old_passwords():
     logger.info(f"Поиск завершен. Найдено пользователей с устаревшими паролями: {len(users)}")
     return users
 
+def get_notification_count(user_login):
+    """Получает количество отправленных уведомлений для пользователя"""
+    try:
+        count = redis_client.get(f"notification_count:{user_login}")
+        return int(count) if count else 0
+    except Exception as e:
+        logger.error(f"Ошибка при получении счетчика уведомлений для {user_login}: {str(e)}")
+        return 0
+
+def increment_notification_count(user_login):
+    """Увеличивает счетчик уведомлений для пользователя"""
+    try:
+        current_count = get_notification_count(user_login)
+        new_count = current_count + 1
+        redis_client.set(f"notification_count:{user_login}", new_count)
+        logger.info(f"Увеличен счетчик уведомлений для {user_login}: {new_count}")
+        return new_count
+    except Exception as e:
+        logger.error(f"Ошибка при увеличении счетчика уведомлений для {user_login}: {str(e)}")
+        return 0
+
+def reset_notification_count(user_login):
+    """Сбрасывает счетчик уведомлений для пользователя"""
+    try:
+        redis_client.delete(f"notification_count:{user_login}")
+        logger.info(f"Сброшен счетчик уведомлений для {user_login}")
+    except Exception as e:
+        logger.error(f"Ошибка при сбросе счетчика уведомлений для {user_login}: {str(e)}")
+
 def send_notification(email, login, given_name='', sn='', last_changed=None):
     """Отправляет email-уведомление"""
     logger.info(f"Подготовка отправки уведомления пользователю {login} на email {email}")
@@ -242,6 +271,10 @@ def send_notification(email, login, given_name='', sn='', last_changed=None):
         last_changed_str = "неизвестно"
         days_passed = PASSWORD_AGE_DAYS
         
+    # Получаем количество отправленных уведомлений
+    notification_count = get_notification_count(login)
+    notification_count = increment_notification_count(login)
+        
     body = f"""<p style="font-weight: 400;">{full_name}!</p>
 """
 
@@ -257,7 +290,7 @@ def send_notification(email, login, given_name='', sn='', last_changed=None):
             server.starttls()
             server.login(SMTP_CONFIG['user'], SMTP_CONFIG['password'])
             server.send_message(msg)
-        logger.info(f"Уведомление успешно отправлено пользователю {login}")
+        logger.info(f"Уведомление #{notification_count} успешно отправлено пользователю {login}")
     except Exception as e:
         logger.error(f"Ошибка при отправке email пользователю {login}: {str(e)}")
 
@@ -330,8 +363,12 @@ def send_telegram_notification(user_info):
         if not full_name:
             full_name = user_info['login']
             
+        # Получаем количество отправленных уведомлений
+        notification_count = get_notification_count(user_info['login'])
+        notification_count = increment_notification_count(user_info['login'])
+            
         message = (
-            f"🔔 Уведомление о устаревшем пароле\n\n"
+            f"🔔 Уведомление о устаревшем пароле #{notification_count}\n\n"
             f"Пользователь: {full_name}\n"
             f"Email: {user_info['email']}\n"
             f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
@@ -359,7 +396,8 @@ def send_telegram_notification(user_info):
                         'user_email': user_info['email'],
                         'user_name': full_name,
                         'sent_at': datetime.now(local_tz).isoformat(),
-                        'password_last_changed': user_info['last_changed'].isoformat()
+                        'password_last_changed': user_info['last_changed'].isoformat(),
+                        'notification_count': notification_count
                     }
                     
                     # Используем message_id как ключ
@@ -373,7 +411,7 @@ def send_telegram_notification(user_info):
                 except redis.ConnectionError as e:
                     logger.error(f"Ошибка подключения к Redis при сохранении сообщения: {str(e)}")
             
-            logger.info(f"Уведомление в Telegram успешно отправлено для пользователя {user_info['login']}")
+            logger.info(f"Уведомление #{notification_count} в Telegram успешно отправлено для пользователя {user_info['login']}")
         else:
             logger.error(f"Ошибка при отправке уведомления в Telegram: {response.text}")
     except Exception as e:
@@ -402,6 +440,8 @@ def check_and_cleanup_old_messages(users_with_old_passwords):
                     if message_id:
                         if delete_telegram_message(message_id):
                             redis_client.delete(key)
+                            # Сбрасываем счетчик уведомлений
+                            reset_notification_count(user_login)
                             logger.info(f"Удалено сообщение {message_id} для пользователя {user_login} (пароль обновлен)")
             except Exception as e:
                 logger.error(f"Ошибка при обработке ключа {key}: {str(e)}")
