@@ -367,12 +367,8 @@ def send_telegram_notification(user_info):
         if not full_name:
             full_name = user_info['login']
             
-        # Получаем количество отправленных уведомлений
-        notification_count = get_notification_count(user_info['login'])
-        notification_count = increment_notification_count(user_info['login'])
-            
         message = (
-            f"🔔 Уведомление о устаревшем пароле #{notification_count}\n\n"
+            f"🔔 Уведомление о устаревшем пароле\n\n"
             f"Пользователь: {full_name}\n"
             f"Email: {user_info['email']}\n"
             f"Последняя смена пароля: {user_info['last_changed'].strftime('%d.%m.%Y %H:%M:%S')}\n"
@@ -400,8 +396,7 @@ def send_telegram_notification(user_info):
                         'user_email': user_info['email'],
                         'user_name': full_name,
                         'sent_at': datetime.now(local_tz).isoformat(),
-                        'password_last_changed': user_info['last_changed'].isoformat(),
-                        'notification_count': notification_count
+                        'password_last_changed': user_info['last_changed'].isoformat()
                     }
                     
                     # Используем message_id как ключ
@@ -415,7 +410,7 @@ def send_telegram_notification(user_info):
                 except redis.ConnectionError as e:
                     logger.error(f"Ошибка подключения к Redis при сохранении сообщения: {str(e)}")
             
-            logger.info(f"Уведомление #{notification_count} в Telegram успешно отправлено для пользователя {user_info['login']}")
+            logger.info(f"Уведомление в Telegram успешно отправлено для пользователя {user_info['login']}")
         else:
             logger.error(f"Ошибка при отправке уведомления в Telegram: {response.text}")
     except Exception as e:
